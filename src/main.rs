@@ -31,7 +31,8 @@ mod vte_handler;
     name = "gscreen",
     version = "0.1.0",
     about = "A true color command wrapper for terminal programs",
-    author = "Gamunu Balagalla <gamunu@fastcode.io>"
+    author = "Gamunu Balagalla <gamunu@fastcode.io>",
+    trailing_var_arg = true
 )]
 struct Args {
     /// The command to run
@@ -39,7 +40,7 @@ struct Args {
     command: String,
 
     /// Arguments to pass to the command
-    #[arg(value_name = "ARGS")]
+    #[arg(value_name = "ARGS", num_args = 0.., allow_hyphen_values = true)]
     args: Vec<String>,
 }
 
