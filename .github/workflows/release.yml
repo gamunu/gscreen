@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # macOS Intel
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive-name: gscreen-macos-intel
+          # macOS Apple Silicon
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive-name: gscreen-macos-apple-silicon
+          # Linux x86_64 (glibc)
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive-name: gscreen-linux-x86_64
+          # Linux x86_64 (musl - static binary)
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            archive-name: gscreen-linux-x86_64-musl
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust toolchain
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        target: ${{ matrix.target }}
+        override: true
+        profile: minimal
+
+    - name: Install cross-compilation dependencies (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y musl-tools
+
+    - name: Build release binary
+      uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: --release --target ${{ matrix.target }}
+        use-cross: ${{ matrix.os == 'ubuntu-latest' && matrix.target == 'x86_64-unknown-linux-musl' }}
+
+    - name: Create archive (Unix)
+      run: |
+        cd target/${{ matrix.target }}/release
+        if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+          tar -czf ../../../${{ matrix.archive-name }}.tar.gz gscreen
+        else
+          tar -czf ../../../${{ matrix.archive-name }}.tar.gz gscreen
+        fi
+
+    - name: Upload archive
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.archive-name }}
+        path: ${{ matrix.archive-name }}.tar.gz
+
+  create-release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Move artifacts to release directory
+      run: |
+        mkdir -p release
+        find artifacts -name "*.tar.gz" -exec cp {} release/ \;
+        ls -la release/
+
+    - name: Extract version from tag
+      id: version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ github.ref }}
+        name: "gscreen v${{ steps.version.outputs.VERSION }}"
+        body: |
+          ## gscreen v${{ steps.version.outputs.VERSION }}
+          
+          A true color command wrapper for terminal programs.
+          
+          ### Downloads
+          
+          | Platform | Architecture | Download |
+          |----------|--------------|----------|
+          | macOS | Intel (x86_64) | [gscreen-macos-intel.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/gscreen-macos-intel.tar.gz) |
+          | macOS | Apple Silicon (ARM64) | [gscreen-macos-apple-silicon.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/gscreen-macos-apple-silicon.tar.gz) |
+          | Linux | x86_64 (glibc) | [gscreen-linux-x86_64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/gscreen-linux-x86_64.tar.gz) |
+          | Linux | x86_64 (musl/static) | [gscreen-linux-x86_64-musl.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/gscreen-linux-x86_64-musl.tar.gz) |
+          
+          ### Installation
+          
+          1. Download the appropriate archive for your platform
+          2. Extract: `tar -xzf gscreen-*.tar.gz`
+          3. Make executable: `chmod +x gscreen`
+          4. Move to PATH: `sudo mv gscreen /usr/local/bin/`
+          
+          ### Usage
+          
+          ```bash
+          gscreen nvim file.txt
+          gscreen htop
+          gscreen any-terminal-command
+          ```
+        files: |
+          release/*
+        draft: false
+        prerelease: false
