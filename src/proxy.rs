@@ -1,29 +1,57 @@
+/*
+ * gscreen - A true color command wrapper for terminal programs
+ * Copyright (C) 2025 Gamunu Balagalla <gamunu@fastcode.io>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEvent};
 use portable_pty::PtyPair;
 use std::io::{Read, Write};
 use std::thread;
 use std::time::Duration;
+use vte::Parser;
 
-use crate::color;
+use crate::vte_handler::VteHandler;
 
 pub async fn run_proxy(pty_pair: &mut PtyPair) -> Result<()> {
     // Enable raw mode for direct character input (ignore errors if not in a TTY)
     let _ = crossterm::terminal::enable_raw_mode();
-    
+
     // Clone the reader for the background thread
-    let mut reader = pty_pair.master.try_clone_reader()
+    let mut reader = pty_pair
+        .master
+        .try_clone_reader()
         .context("Failed to clone PTY reader")?;
-    
+
     // Get a writer handle
-    let writer = pty_pair.master.take_writer()
+    let writer = pty_pair
+        .master
+        .take_writer()
         .context("Failed to get PTY writer")?;
-    
-    // Spawn a thread to handle PTY output -> stdout
+
+    // Spawn a thread to handle PTY output -> stdout with VTE parsing
     let output_handle = thread::spawn(move || {
         let mut buffer = [0u8; 4096];
-        let mut stdout = std::io::stdout();
-        
+        let stdout = std::io::stdout();
+
+        // Create VTE parser and handler
+        let mut parser = Parser::new();
+        let mut vte_handler = VteHandler::new(Box::new(stdout));
+
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => {
@@ -31,15 +59,9 @@ pub async fn run_proxy(pty_pair: &mut PtyPair) -> Result<()> {
                     break;
                 }
                 Ok(n) => {
-                    // Convert true colors to 256-color equivalents
-                    let converted_output = color::convert_truecolor_to_256(&buffer[..n]);
-                    
-                    // Write converted output to stdout
-                    if stdout.write_all(&converted_output).is_err() {
-                        break;
-                    }
-                    if stdout.flush().is_err() {
-                        break;
+                    // Process bytes through VTE parser
+                    for &byte in &buffer[..n] {
+                        parser.advance(&mut vte_handler, byte);
                     }
                 }
                 Err(_) => {
@@ -49,17 +71,17 @@ pub async fn run_proxy(pty_pair: &mut PtyPair) -> Result<()> {
             }
         }
     });
-    
+
     // Main async loop for input handling
     let mut last_size = crossterm::terminal::size().unwrap_or((80, 24));
     let mut writer = writer;
-    
+
     loop {
         // Check if output thread is still running
         if output_handle.is_finished() {
             break;
         }
-        
+
         // Handle input events
         if let Ok(Some(input)) = read_user_input().await {
             // Write to PTY writer
@@ -70,7 +92,7 @@ pub async fn run_proxy(pty_pair: &mut PtyPair) -> Result<()> {
                 break;
             }
         }
-        
+
         // Handle window resize
         if let Ok(current_size) = crossterm::terminal::size() {
             if current_size != last_size {
@@ -84,24 +106,26 @@ pub async fn run_proxy(pty_pair: &mut PtyPair) -> Result<()> {
                 let _ = pty_pair.master.resize(size);
             }
         }
-        
-        // Small delay to prevent busy waiting
-        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Small delay to prevent busy waiting - reduced for better mouse responsiveness
+        tokio::time::sleep(Duration::from_millis(1)).await;
     }
-    
+
     // Wait for output thread to finish
     let _ = output_handle.join();
-    
+
     Ok(())
 }
 
 async fn read_user_input() -> Result<Option<Vec<u8>>> {
-    // Poll for events without blocking too long
-    if event::poll(Duration::from_millis(10))
-        .context("Failed to poll for events")? 
-    {
+    // Poll for events with faster response for better mouse performance
+    if event::poll(Duration::from_millis(1)).context("Failed to poll for events")? {
         match event::read().context("Failed to read event")? {
-            Event::Key(KeyEvent { code: KeyCode::Char(c), modifiers, .. }) => {
+            Event::Key(KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                ..
+            }) => {
                 // Handle special key combinations
                 if modifiers.contains(event::KeyModifiers::CONTROL) {
                     match c {
@@ -110,7 +134,10 @@ async fn read_user_input() -> Result<Option<Vec<u8>>> {
                         'z' => return Ok(Some(vec![0x1a])), // Ctrl+Z
                         _ => {
                             // Other Ctrl combinations
-                            let ctrl_char = (c as u8).to_ascii_lowercase().wrapping_sub(b'a').wrapping_add(1);
+                            let ctrl_char = (c as u8)
+                                .to_ascii_lowercase()
+                                .wrapping_sub(b'a')
+                                .wrapping_add(1);
                             return Ok(Some(vec![ctrl_char]));
                         }
                     }
@@ -157,12 +184,102 @@ async fn read_user_input() -> Result<Option<Vec<u8>>> {
                 };
                 return Ok(Some(bytes));
             }
+            Event::Mouse(mouse_event) => {
+                // Handle mouse events - convert to appropriate escape sequences
+                use crossterm::event::{MouseButton, MouseEventKind};
+
+                match mouse_event.kind {
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        // Mouse button down - send SGR mouse report
+                        let sequence = format!(
+                            "\x1b[<0;{};{}M",
+                            mouse_event.column + 1,
+                            mouse_event.row + 1
+                        );
+                        return Ok(Some(sequence.into_bytes()));
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        // Mouse button up
+                        let sequence = format!(
+                            "\x1b[<0;{};{}m",
+                            mouse_event.column + 1,
+                            mouse_event.row + 1
+                        );
+                        return Ok(Some(sequence.into_bytes()));
+                    }
+                    MouseEventKind::Down(MouseButton::Right) => {
+                        let sequence = format!(
+                            "\x1b[<2;{};{}M",
+                            mouse_event.column + 1,
+                            mouse_event.row + 1
+                        );
+                        return Ok(Some(sequence.into_bytes()));
+                    }
+                    MouseEventKind::Up(MouseButton::Right) => {
+                        let sequence = format!(
+                            "\x1b[<2;{};{}m",
+                            mouse_event.column + 1,
+                            mouse_event.row + 1
+                        );
+                        return Ok(Some(sequence.into_bytes()));
+                    }
+                    MouseEventKind::Down(MouseButton::Middle) => {
+                        let sequence = format!(
+                            "\x1b[<1;{};{}M",
+                            mouse_event.column + 1,
+                            mouse_event.row + 1
+                        );
+                        return Ok(Some(sequence.into_bytes()));
+                    }
+                    MouseEventKind::Up(MouseButton::Middle) => {
+                        let sequence = format!(
+                            "\x1b[<1;{};{}m",
+                            mouse_event.column + 1,
+                            mouse_event.row + 1
+                        );
+                        return Ok(Some(sequence.into_bytes()));
+                    }
+                    MouseEventKind::Drag(MouseButton::Left) => {
+                        let sequence = format!(
+                            "\x1b[<32;{};{}M",
+                            mouse_event.column + 1,
+                            mouse_event.row + 1
+                        );
+                        return Ok(Some(sequence.into_bytes()));
+                    }
+                    MouseEventKind::Moved => {
+                        // Mouse movement without button pressed - don't send by default
+                        // Most terminal applications only care about movement during drag
+                        return Ok(None);
+                    }
+                    MouseEventKind::ScrollDown => {
+                        let sequence = format!(
+                            "\x1b[<65;{};{}M",
+                            mouse_event.column + 1,
+                            mouse_event.row + 1
+                        );
+                        return Ok(Some(sequence.into_bytes()));
+                    }
+                    MouseEventKind::ScrollUp => {
+                        let sequence = format!(
+                            "\x1b[<64;{};{}M",
+                            mouse_event.column + 1,
+                            mouse_event.row + 1
+                        );
+                        return Ok(Some(sequence.into_bytes()));
+                    }
+                    _ => {
+                        // Other mouse events
+                        return Ok(None);
+                    }
+                }
+            }
             _ => {
-                // Ignore other events (mouse, resize, etc.)
+                // Other events (resize, etc.)
                 return Ok(None);
             }
         }
     }
-    
+
     Ok(None)
 }
