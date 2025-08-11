@@ -157,9 +157,9 @@ impl VteHandler {
                     } else {
                         // Pass through unchanged
                         let _ = self.write_string("\x1b[38");
-                        for j in (i + 1)..param_vec.len() {
-                            if !param_vec[j].is_empty() {
-                                let _ = self.write_string(&format!(";{}", param_vec[j][0]));
+                        for param in param_vec.iter().skip(i + 1) {
+                            if !param.is_empty() {
+                                let _ = self.write_string(&format!(";{}", param[0]));
                             }
                         }
                         let _ = self.write_string("m");
@@ -176,9 +176,9 @@ impl VteHandler {
                     } else {
                         // Pass through unchanged
                         let _ = self.write_string("\x1b[48");
-                        for j in (i + 1)..param_vec.len() {
-                            if !param_vec[j].is_empty() {
-                                let _ = self.write_string(&format!(";{}", param_vec[j][0]));
+                        for param in param_vec.iter().skip(i + 1) {
+                            if !param.is_empty() {
+                                let _ = self.write_string(&format!(";{}", param[0]));
                             }
                         }
                         let _ = self.write_string("m");

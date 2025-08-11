@@ -18,27 +18,15 @@
  */
 
 use anyhow::{Context, Result};
-use crossterm::{execute, terminal};
-use std::io::{self};
+use crossterm::terminal;
+use std::sync::Once;
 
-static mut TERMINAL_STATE: Option<TerminalState> = None;
-
-struct TerminalState {
-    was_raw_mode: bool,
-    was_alternate_screen: bool,
-}
+static INIT: Once = Once::new();
 
 pub fn setup_true_color_environment() -> Result<()> {
-    unsafe {
-        if TERMINAL_STATE.is_some() {
-            return Ok(()); // Already set up
-        }
-
-        TERMINAL_STATE = Some(TerminalState {
-            was_raw_mode: false,
-            was_alternate_screen: false,
-        });
-    }
+    INIT.call_once(|| {
+        // Environment setup is done here - this runs only once
+    });
 
     // Check if terminal supports true colors
     detect_and_report_color_support();
@@ -61,10 +49,6 @@ pub fn restore_terminal() -> Result<()> {
 
     // We don't need to leave alternate screen since we never entered it
     // The child process should handle its own screen mode
-
-    unsafe {
-        TERMINAL_STATE = None;
-    }
 
     Ok(())
 }
@@ -94,63 +78,4 @@ fn detect_and_report_color_support() {
     if !term_program.is_empty() {
         eprintln!("  TERM_PROGRAM: {}", term_program);
     }
-}
-
-pub fn enable_mouse_support() -> Result<()> {
-    execute!(io::stdout(), crossterm::event::EnableMouseCapture)
-        .context("Failed to enable mouse capture")?;
-
-    Ok(())
-}
-
-pub fn disable_mouse_support() -> Result<()> {
-    execute!(io::stdout(), crossterm::event::DisableMouseCapture)
-        .context("Failed to disable mouse capture")?;
-
-    Ok(())
-}
-
-pub fn clear_screen() -> Result<()> {
-    execute!(
-        io::stdout(),
-        terminal::Clear(terminal::ClearType::All),
-        crossterm::cursor::MoveTo(0, 0)
-    )
-    .context("Failed to clear screen")?;
-
-    Ok(())
-}
-
-// Test true color output
-pub fn test_true_colors() -> Result<()> {
-    println!("Testing true color output:");
-
-    // Test RGB colors
-    for i in 0..=255 {
-        let r = i;
-        let g = 255 - i;
-        let b = i / 2;
-
-        execute!(
-            io::stdout(),
-            crossterm::style::SetForegroundColor(crossterm::style::Color::Rgb { r, g, b }),
-            crossterm::style::Print("█"),
-        )?;
-
-        if i % 32 == 31 {
-            execute!(
-                io::stdout(),
-                crossterm::style::ResetColor,
-                crossterm::style::Print("\n")
-            )?;
-        }
-    }
-
-    execute!(
-        io::stdout(),
-        crossterm::style::ResetColor,
-        crossterm::style::Print("\n")
-    )?;
-
-    Ok(())
 }

@@ -68,23 +68,3 @@ pub fn create_pty_with_command(command: &str, args: &[String]) -> Result<PtyPair
 
     Ok(pty_pair)
 }
-
-pub fn get_terminal_size() -> Result<PtySize> {
-    let (cols, rows) = crossterm::terminal::size().context("Failed to get terminal size")?;
-
-    Ok(PtySize {
-        rows: rows,
-        cols: cols,
-        pixel_width: 0,
-        pixel_height: 0,
-    })
-}
-
-pub fn resize_pty(pty_pair: &PtyPair) -> Result<()> {
-    let size = get_terminal_size()?;
-    pty_pair
-        .master
-        .resize(size)
-        .context("Failed to resize PTY")?;
-    Ok(())
-}
