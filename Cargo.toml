@@ -1,6 +1,6 @@
 [package]
 name = "gscreen"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Gamunu Balagalla <gamunu@fastcode.io>"]
 description = "A true color command wrapper for terminal programs"
