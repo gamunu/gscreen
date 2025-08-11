@@ -55,6 +55,11 @@ pub fn create_pty_with_command(command: &str, args: &[String]) -> Result<PtyPair
     let mut cmd_builder = CommandBuilder::new(command);
     cmd_builder.args(args);
 
+    // Set the current working directory to match the shell's cwd
+    if let Ok(current_dir) = std::env::current_dir() {
+        cmd_builder.cwd(current_dir);
+    }
+
     // Set environment variables
     for (key, value) in env_vars {
         cmd_builder.env(&key, &value);

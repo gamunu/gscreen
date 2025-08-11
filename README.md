@@ -4,40 +4,52 @@ A true color command wrapper for terminal programs.
 
 ## About
 
-gscreen is a lightweight wrapper that enables true color (24-bit RGB) support for any terminal program. It's particularly useful for applications like vim, neovim, htop, and other terminal programs that benefit from enhanced color rendering but might not detect true color support correctly.
+gscreen is a lightweight wrapper that enables true color (24-bit RGB) support for any terminal program. Useful for applications like vim, neovim, htop, and other programs that benefit from enhanced color rendering.
 
 ## Features
 
-- ✅ **True Color Support**: Automatically sets `COLORTERM=truecolor` and other environment variables
-- ✅ **Universal Compatibility**: Works with any command-line program  
-- ✅ **Transparent Operation**: Programs don't know they're being wrapped
-- ✅ **Modern Architecture**: Built with async Rust and modern dependencies
-- ✅ **Cross-Platform**: Works on macOS, Linux, and other Unix systems
-- ✅ **Full I/O Support**: Complete keyboard input forwarding and output rendering
+- **True Color Support**: Automatically sets `COLORTERM=truecolor` and other environment variables
+- **Universal Compatibility**: Works with any command-line program  
+- **Transparent Operation**: Programs don't know they're being wrapped
+- **Modern Architecture**: Built with async Rust and modern dependencies
+- **Cross-Platform**: Works on macOS, Linux, and other Unix systems
+- **Full I/O Support**: Complete keyboard input forwarding and output rendering
 
 ## Installation
 
+### Download Release Binary
+
+Download the latest release from [GitHub Releases](https://github.com/gamunu/gscreen/releases/latest):
+
 ```bash
-# Build from source
+# Download and extract for your platform
+curl -L https://github.com/gamunu/gscreen/releases/download/v0.1.0/gscreen-macos-intel.tar.gz | tar -xz
+chmod +x gscreen
+sudo mv gscreen /usr/local/bin/
+```
+
+### Build from Source
+
+```bash
 git clone https://github.com/gamunu/gscreen.git
 cd gscreen
 cargo build --release
-
-# The binary will be at ./target/release/gscreen
+# Binary will be at ./target/release/gscreen
 ```
 
 ## Usage
 
-Use gscreen as a prefix to any terminal command:
-
 ```bash
-# Launch vim with true colors
+# Basic usage
 gscreen vim file.txt
-
-# Launch neovim with enhanced colors
 gscreen nvim config.rs
 
-# Use with any terminal program
+# Works with command arguments
+gscreen ls -la
+gscreen git status
+gscreen vim .
+
+# Any terminal program
 gscreen htop
 gscreen ranger
 gscreen bat README.md
