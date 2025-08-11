@@ -23,13 +23,13 @@ use std::sync::Once;
 
 static INIT: Once = Once::new();
 
-pub fn setup_true_color_environment() -> Result<()> {
+pub fn setup_true_color_environment(debug: bool) -> Result<()> {
     INIT.call_once(|| {
         // Environment setup is done here - this runs only once
     });
 
     // Check if terminal supports true colors
-    detect_and_report_color_support();
+    detect_and_report_color_support(debug);
 
     // Set environment variables for the current process
     // (these will be inherited by child processes)
@@ -53,7 +53,7 @@ pub fn restore_terminal() -> Result<()> {
     Ok(())
 }
 
-fn detect_and_report_color_support() {
+fn detect_and_report_color_support(debug: bool) {
     // Check various environment variables that indicate color support
     let colorterm = std::env::var("COLORTERM").unwrap_or_default();
     let term = std::env::var("TERM").unwrap_or_default();
@@ -65,17 +65,19 @@ fn detect_and_report_color_support() {
         || term_program == "iTerm.app"
         || term_program == "Apple_Terminal";
 
-    if has_truecolor {
-        eprintln!("✓ True color support detected");
-    } else {
-        eprintln!("⚠ True color support not detected, but will be forced");
-    }
+    if debug {
+        if has_truecolor {
+            eprintln!("✓ True color support detected");
+        } else {
+            eprintln!("⚠ True color support not detected, but will be forced");
+        }
 
-    // Report current terminal info
-    eprintln!("Terminal info:");
-    eprintln!("  TERM: {}", term);
-    eprintln!("  COLORTERM: {}", colorterm);
-    if !term_program.is_empty() {
-        eprintln!("  TERM_PROGRAM: {}", term_program);
+        // Report current terminal info
+        eprintln!("Terminal info:");
+        eprintln!("  TERM: {}", term);
+        eprintln!("  COLORTERM: {}", colorterm);
+        if !term_program.is_empty() {
+            eprintln!("  TERM_PROGRAM: {}", term_program);
+        }
     }
 }

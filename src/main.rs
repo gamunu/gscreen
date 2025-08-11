@@ -42,6 +42,10 @@ struct Args {
     /// Arguments to pass to the command
     #[arg(value_name = "ARGS", num_args = 0.., allow_hyphen_values = true)]
     args: Vec<String>,
+
+    /// Enable debug output
+    #[arg(long, short, help = "Enable debug output")]
+    debug: bool,
 }
 
 #[tokio::main]
@@ -53,10 +57,12 @@ async fn main() -> Result<()> {
         anyhow::bail!("Command '{}' not found in PATH", args.command);
     }
 
-    println!("Starting {} with true color support...", args.command);
+    if args.debug {
+        println!("Starting {} with true color support...", args.command);
+    }
 
     // Set up terminal for true color support
-    terminal::setup_true_color_environment()?;
+    terminal::setup_true_color_environment(args.debug)?;
 
     // Spawn the command in a PTY
     let mut pty_pair =

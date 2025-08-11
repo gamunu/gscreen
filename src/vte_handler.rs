@@ -71,19 +71,23 @@ impl Perform for VteHandler {
     }
 
     fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
-        // Operating System Command sequences - pass through
-        let _ = self.write_string("\x1b]");
+        // OSC sequences - pass through as-is to avoid parsing issues
+        // Just reconstruct the complete sequence exactly as received
+        let _ = self.write_bytes(b"\x1b]");
+        
+        // Write parameters with proper semicolon separation
         for (i, param) in params.iter().enumerate() {
             if i > 0 {
                 let _ = self.write_bytes(b";");
             }
             let _ = self.write_bytes(param);
         }
-        // Use the correct terminator
+        
+        // Always use the terminator that was actually received
         if bell_terminated {
-            let _ = self.write_bytes(b"\x07"); // BEL terminator
+            let _ = self.write_bytes(b"\x07"); // BEL (^G)
         } else {
-            let _ = self.write_string("\x1b\\"); // ST terminator
+            let _ = self.write_bytes(b"\x1b\\"); // ST
         }
     }
 
