@@ -25,11 +25,15 @@ use crate::color;
 /// VTE Perform handler that processes terminal sequences and applies color conversion
 pub struct VteHandler {
     writer: Box<dyn Write + Send>,
+    has_osc_support: bool,
 }
 
 impl VteHandler {
-    pub fn new(writer: Box<dyn Write + Send>) -> Self {
-        Self { writer }
+    pub fn new(writer: Box<dyn Write + Send>, has_osc_support: bool) -> Self {
+        Self {
+            writer,
+            has_osc_support,
+        }
     }
 
     fn write_bytes(&mut self, bytes: &[u8]) -> io::Result<()> {
@@ -71,19 +75,52 @@ impl Perform for VteHandler {
     }
 
     fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
-        // Operating System Command sequences - pass through
-        let _ = self.write_string("\x1b]");
+        if params.is_empty() {
+            return;
+        }
+
+        let param_str = String::from_utf8_lossy(params[0]);
+
+        // Handle OSC queries for terminals that don't support them
+        if !self.has_osc_support {
+            match param_str.as_ref() {
+                "10" => {
+                    // OSC 10: Foreground color query - respond with white
+                    let _ = self.write_bytes(b"\x1b]10;rgb:ffff/ffff/ffff\x07");
+                    return;
+                }
+                "11" => {
+                    // OSC 11: Background color query - respond with black
+                    let _ = self.write_bytes(b"\x1b]11;rgb:0000/0000/0000\x07");
+                    return;
+                }
+                "12" => {
+                    // OSC 12: Cursor color query - respond with white
+                    let _ = self.write_bytes(b"\x1b]12;rgb:ffff/ffff/ffff\x07");
+                    return;
+                }
+                _ => {
+                    // For other OSC sequences, pass through normally
+                }
+            }
+        }
+
+        // For supported terminals or non-query OSC sequences, pass through
+        let _ = self.write_bytes(b"\x1b]");
+
+        // Write parameters with proper semicolon separation
         for (i, param) in params.iter().enumerate() {
             if i > 0 {
                 let _ = self.write_bytes(b";");
             }
             let _ = self.write_bytes(param);
         }
-        // Use the correct terminator
+
+        // Always use the terminator that was actually received
         if bell_terminated {
-            let _ = self.write_bytes(b"\x07"); // BEL terminator
+            let _ = self.write_bytes(b"\x07"); // BEL (^G)
         } else {
-            let _ = self.write_string("\x1b\\"); // ST terminator
+            let _ = self.write_bytes(b"\x1b\\"); // ST
         }
     }
 
@@ -95,6 +132,7 @@ impl Perform for VteHandler {
             }
             _ => {
                 // All other CSI sequences, pass through unchanged
+
                 let _ = self.write_string("\x1b[");
                 self.write_params(params);
                 for &intermediate in intermediates {
@@ -251,6 +289,109 @@ impl VteHandler {
                 None
             }
             _ => None,
+        }
+    }
+}
+
+/// InputVteHandler processes terminal responses (terminal -> application)
+/// Unlike the output handler, this one passes sequences through without color conversion
+pub struct InputVteHandler {
+    writer: Box<dyn Write + Send>,
+}
+
+impl InputVteHandler {
+    pub fn new(writer: Box<dyn Write + Send>) -> Self {
+        Self { writer }
+    }
+
+    fn write_bytes(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.writer.write_all(bytes)?;
+        self.writer.flush()
+    }
+
+    fn write_string(&mut self, s: &str) -> io::Result<()> {
+        self.write_bytes(s.as_bytes())
+    }
+}
+
+impl Perform for InputVteHandler {
+    fn print(&mut self, c: char) {
+        let _ = self.write_string(&c.to_string());
+    }
+
+    fn execute(&mut self, byte: u8) {
+        let _ = self.write_bytes(&[byte]);
+    }
+
+    fn hook(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, c: char) {
+        // DCS sequences - reconstruct and pass through unchanged
+        let _ = self.write_string("\x1bP");
+        self.write_params(params);
+        for &intermediate in intermediates {
+            let _ = self.write_bytes(&[intermediate]);
+        }
+        let _ = self.write_string(&c.to_string());
+    }
+
+    fn put(&mut self, byte: u8) {
+        let _ = self.write_bytes(&[byte]);
+    }
+
+    fn unhook(&mut self) {
+        // End of DCS sequence
+        let _ = self.write_string("\x1b\\"); // ST terminator
+    }
+
+    fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
+        // OSC sequences - pass through unchanged (no color conversion)
+        let _ = self.write_bytes(b"\x1b]");
+
+        // Write parameters with proper semicolon separation
+        for (i, param) in params.iter().enumerate() {
+            if i > 0 {
+                let _ = self.write_bytes(b";");
+            }
+            let _ = self.write_bytes(param);
+        }
+
+        // Use the terminator that was actually received
+        if bell_terminated {
+            let _ = self.write_bytes(b"\x07"); // BEL (^G)
+        } else {
+            let _ = self.write_bytes(b"\x1b\\"); // ST
+        }
+    }
+
+    fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, c: char) {
+        // All CSI sequences pass through unchanged (no color processing for input)
+        let _ = self.write_string("\x1b[");
+        self.write_params(params);
+        for &intermediate in intermediates {
+            let _ = self.write_bytes(&[intermediate]);
+        }
+        let _ = self.write_string(&c.to_string());
+    }
+
+    fn esc_dispatch(&mut self, intermediates: &[u8], _ignore: bool, byte: u8) {
+        // ESC sequences - pass through unchanged
+        let _ = self.write_bytes(b"\x1b");
+        let _ = self.write_bytes(intermediates);
+        let _ = self.write_bytes(&[byte]);
+    }
+}
+
+impl InputVteHandler {
+    fn write_params(&mut self, params: &Params) {
+        for (i, param) in params.iter().enumerate() {
+            if i > 0 {
+                let _ = self.write_string(";");
+            }
+            for (j, &value) in param.iter().enumerate() {
+                if j > 0 {
+                    let _ = self.write_string(":");
+                }
+                let _ = self.write_string(&value.to_string());
+            }
         }
     }
 }

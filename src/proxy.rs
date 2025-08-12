@@ -25,11 +25,16 @@ use std::thread;
 use std::time::Duration;
 use vte::Parser;
 
-use crate::vte_handler::VteHandler;
+use crate::vte_handler::{InputVteHandler, VteHandler};
 
-pub async fn run_proxy(pty_pair: &mut PtyPair) -> Result<()> {
-    // Enable raw mode for direct character input (ignore errors if not in a TTY)
-    let _ = crossterm::terminal::enable_raw_mode();
+pub async fn run_proxy(pty_pair: &mut PtyPair, has_osc_support: bool) -> Result<()> {
+    // Check if stdin is a TTY
+    let stdin_is_tty = crossterm::tty::IsTty::is_tty(&std::io::stdin());
+
+    // Enable raw mode only if stdin is a TTY
+    if stdin_is_tty {
+        let _ = crossterm::terminal::enable_raw_mode();
+    }
 
     // Clone the reader for the background thread
     let mut reader = pty_pair
@@ -48,9 +53,9 @@ pub async fn run_proxy(pty_pair: &mut PtyPair) -> Result<()> {
         let mut buffer = [0u8; 4096];
         let stdout = std::io::stdout();
 
-        // Create VTE parser and handler
+        // Create VTE parser and handler with capability info
         let mut parser = Parser::new();
-        let mut vte_handler = VteHandler::new(Box::new(stdout));
+        let mut vte_handler = VteHandler::new(Box::new(stdout), has_osc_support);
 
         loop {
             match reader.read(&mut buffer) {
@@ -72,43 +77,80 @@ pub async fn run_proxy(pty_pair: &mut PtyPair) -> Result<()> {
         }
     });
 
-    // Main async loop for input handling
-    let mut last_size = crossterm::terminal::size().unwrap_or((80, 24));
-    let mut writer = writer;
+    // Handle input differently based on whether stdin is a TTY
+    if stdin_is_tty {
+        // TTY mode: use crossterm event handling for interactive input
+        let mut last_size = crossterm::terminal::size().unwrap_or((80, 24));
+        let mut writer = writer;
 
-    loop {
-        // Check if output thread is still running
-        if output_handle.is_finished() {
-            break;
-        }
-
-        // Handle input events
-        if let Ok(Some(input)) = read_user_input().await {
-            // Write to PTY writer
-            if writer.write_all(&input).is_err() {
+        loop {
+            // Check if output thread is still running
+            if output_handle.is_finished() {
                 break;
             }
-            if writer.flush().is_err() {
+
+            // Handle input events
+            if let Ok(Some(input)) = read_user_input().await {
+                // Write to PTY writer
+                if writer.write_all(&input).is_err() {
+                    break;
+                }
+                if writer.flush().is_err() {
+                    break;
+                }
+            }
+
+            // Handle window resize
+            if let Ok(current_size) = crossterm::terminal::size() {
+                if current_size != last_size {
+                    last_size = current_size;
+                    let size = portable_pty::PtySize {
+                        rows: current_size.1,
+                        cols: current_size.0,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    };
+                    let _ = pty_pair.master.resize(size);
+                }
+            }
+
+            // Small delay to prevent busy waiting
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    } else {
+        // Non-TTY mode: copy stdin to PTY with VTE processing for terminal responses
+        let writer = writer;
+        let stdin_thread = thread::spawn(move || {
+            let mut stdin = std::io::stdin();
+            let mut buffer = [0u8; 4096];
+
+            // Create VTE parser and input handler for processing terminal responses
+            let mut parser = Parser::new();
+            let mut input_handler = InputVteHandler::new(Box::new(writer));
+
+            loop {
+                match stdin.read(&mut buffer) {
+                    Ok(0) => break, // EOF
+                    Ok(n) => {
+                        // Process bytes through input VTE parser to handle terminal responses
+                        for &byte in &buffer[..n] {
+                            parser.advance(&mut input_handler, byte);
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        // Wait for either the output or stdin thread to finish
+        loop {
+            if output_handle.is_finished() || stdin_thread.is_finished() {
                 break;
             }
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        // Handle window resize
-        if let Ok(current_size) = crossterm::terminal::size() {
-            if current_size != last_size {
-                last_size = current_size;
-                let size = portable_pty::PtySize {
-                    rows: current_size.1,
-                    cols: current_size.0,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                };
-                let _ = pty_pair.master.resize(size);
-            }
-        }
-
-        // Small delay to prevent busy waiting - reduced for better mouse responsiveness
-        tokio::time::sleep(Duration::from_millis(1)).await;
+        let _ = stdin_thread.join();
     }
 
     // Wait for output thread to finish

@@ -29,7 +29,7 @@ mod vte_handler;
 #[derive(Parser)]
 #[command(
     name = "gscreen",
-    version = "0.1.0",
+    version = "0.2.0",
     about = "A true color command wrapper for terminal programs",
     author = "Gamunu Balagalla <gamunu@fastcode.io>",
     trailing_var_arg = true
@@ -42,6 +42,10 @@ struct Args {
     /// Arguments to pass to the command
     #[arg(value_name = "ARGS", num_args = 0.., allow_hyphen_values = true)]
     args: Vec<String>,
+
+    /// Enable debug output
+    #[arg(long, short, help = "Enable debug output")]
+    debug: bool,
 }
 
 #[tokio::main]
@@ -53,17 +57,19 @@ async fn main() -> Result<()> {
         anyhow::bail!("Command '{}' not found in PATH", args.command);
     }
 
-    println!("Starting {} with true color support...", args.command);
+    if args.debug {
+        println!("Starting {} with true color support...", args.command);
+    }
 
-    // Set up terminal for true color support
-    terminal::setup_true_color_environment()?;
+    // Set up terminal for true color support and get capabilities
+    let has_osc_support = terminal::setup_true_color_environment(args.debug)?;
 
     // Spawn the command in a PTY
     let mut pty_pair =
         pty::create_pty_with_command(&args.command, &args.args).context("Failed to create PTY")?;
 
-    // Start bidirectional I/O proxy
-    let result = proxy::run_proxy(&mut pty_pair)
+    // Start bidirectional I/O proxy with capability info
+    let result = proxy::run_proxy(&mut pty_pair, has_osc_support)
         .await
         .context("I/O proxy failed");
 
