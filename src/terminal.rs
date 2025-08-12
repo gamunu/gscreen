@@ -23,13 +23,13 @@ use std::sync::Once;
 
 static INIT: Once = Once::new();
 
-pub fn setup_true_color_environment(debug: bool) -> Result<()> {
+pub fn setup_true_color_environment(debug: bool) -> Result<bool> {
     INIT.call_once(|| {
         // Environment setup is done here - this runs only once
     });
 
-    // Check if terminal supports true colors
-    detect_and_report_color_support(debug);
+    // Check terminal capabilities and get OSC support info
+    let has_osc_support = detect_and_report_color_support(debug);
 
     // Set environment variables for the current process
     // (these will be inherited by child processes)
@@ -38,7 +38,7 @@ pub fn setup_true_color_environment(debug: bool) -> Result<()> {
     std::env::set_var("FORCE_COLOR", "1");
     std::env::set_var("CLICOLOR_FORCE", "1");
 
-    Ok(())
+    Ok(has_osc_support)
 }
 
 pub fn restore_terminal() -> Result<()> {
@@ -53,7 +53,7 @@ pub fn restore_terminal() -> Result<()> {
     Ok(())
 }
 
-fn detect_and_report_color_support(debug: bool) {
+fn detect_and_report_color_support(debug: bool) -> bool {
     // Check various environment variables that indicate color support
     let colorterm = std::env::var("COLORTERM").unwrap_or_default();
     let term = std::env::var("TERM").unwrap_or_default();
@@ -65,11 +65,20 @@ fn detect_and_report_color_support(debug: bool) {
         || term_program == "iTerm.app"
         || term_program == "Apple_Terminal";
 
+    // Check for OSC color query support
+    let has_osc_support = detect_osc_support(&term, &colorterm, &term_program);
+
     if debug {
         if has_truecolor {
             eprintln!("✓ True color support detected");
         } else {
             eprintln!("⚠ True color support not detected, but will be forced");
+        }
+
+        if has_osc_support {
+            eprintln!("✓ OSC color query support detected");
+        } else {
+            eprintln!("⚠ OSC color query support not detected - queries may appear as text");
         }
 
         // Report current terminal info
@@ -78,6 +87,24 @@ fn detect_and_report_color_support(debug: bool) {
         eprintln!("  COLORTERM: {}", colorterm);
         if !term_program.is_empty() {
             eprintln!("  TERM_PROGRAM: {}", term_program);
+        }
+    }
+
+    has_osc_support
+}
+
+fn detect_osc_support(term: &str, colorterm: &str, term_program: &str) -> bool {
+    // Terminals known to support OSC color queries (OSC 10, 11, 12)
+    match term_program {
+        "iTerm.app" => true,       // iTerm2 supports OSC color queries
+        "Apple_Terminal" => false, // macOS Terminal doesn't support color queries
+        "Hyper" => true,           // Hyper terminal supports them
+        "vscode" => true,          // VS Code terminal supports them
+        _ => {
+            // Check for VTE-based terminals (GNOME Terminal, Tilix, etc.) or modern terminals
+            (term.starts_with("xterm") && !colorterm.is_empty())
+                || term.contains("256color")
+                || colorterm == "truecolor"
         }
     }
 }

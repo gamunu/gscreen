@@ -25,9 +25,9 @@ use std::thread;
 use std::time::Duration;
 use vte::Parser;
 
-use crate::vte_handler::VteHandler;
+use crate::vte_handler::{InputVteHandler, VteHandler};
 
-pub async fn run_proxy(pty_pair: &mut PtyPair) -> Result<()> {
+pub async fn run_proxy(pty_pair: &mut PtyPair, has_osc_support: bool) -> Result<()> {
     // Check if stdin is a TTY
     let stdin_is_tty = crossterm::tty::IsTty::is_tty(&std::io::stdin());
 
@@ -53,9 +53,9 @@ pub async fn run_proxy(pty_pair: &mut PtyPair) -> Result<()> {
         let mut buffer = [0u8; 4096];
         let stdout = std::io::stdout();
 
-        // Create VTE parser and handler
+        // Create VTE parser and handler with capability info
         let mut parser = Parser::new();
-        let mut vte_handler = VteHandler::new(Box::new(stdout));
+        let mut vte_handler = VteHandler::new(Box::new(stdout), has_osc_support);
 
         loop {
             match reader.read(&mut buffer) {
@@ -118,21 +118,23 @@ pub async fn run_proxy(pty_pair: &mut PtyPair) -> Result<()> {
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
     } else {
-        // Non-TTY mode: copy stdin directly to PTY in a separate thread
-        let mut writer = writer;
+        // Non-TTY mode: copy stdin to PTY with VTE processing for terminal responses
+        let writer = writer;
         let stdin_thread = thread::spawn(move || {
             let mut stdin = std::io::stdin();
             let mut buffer = [0u8; 4096];
+
+            // Create VTE parser and input handler for processing terminal responses
+            let mut parser = Parser::new();
+            let mut input_handler = InputVteHandler::new(Box::new(writer));
 
             loop {
                 match stdin.read(&mut buffer) {
                     Ok(0) => break, // EOF
                     Ok(n) => {
-                        if writer.write_all(&buffer[..n]).is_err() {
-                            break;
-                        }
-                        if writer.flush().is_err() {
-                            break;
+                        // Process bytes through input VTE parser to handle terminal responses
+                        for &byte in &buffer[..n] {
+                            parser.advance(&mut input_handler, byte);
                         }
                     }
                     Err(_) => break,
