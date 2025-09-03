@@ -18,10 +18,10 @@
  */
 
 use anyhow::{Context, Result};
-use portable_pty::{CommandBuilder, PtyPair, PtySize};
+use portable_pty::{Child, CommandBuilder, PtyPair, PtySize};
 use std::collections::HashMap;
 
-pub fn create_pty_with_command(command: &str, args: &[String]) -> Result<PtyPair> {
+pub fn create_pty_with_command(command: &str, args: &[String]) -> Result<(PtyPair, Box<dyn Child>)> {
     // Create a new PTY with the actual terminal size
     let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24)); // fallback to 80x24 if detection fails
 
@@ -66,10 +66,10 @@ pub fn create_pty_with_command(command: &str, args: &[String]) -> Result<PtyPair
     }
 
     // Spawn the command in the PTY slave
-    let _child = pty_pair
+    let child = pty_pair
         .slave
         .spawn_command(cmd_builder)
         .context("Failed to spawn command in PTY")?;
 
-    Ok(pty_pair)
+    Ok((pty_pair, child))
 }

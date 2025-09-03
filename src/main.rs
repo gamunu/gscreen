@@ -65,16 +65,19 @@ async fn main() -> Result<()> {
     let has_osc_support = terminal::setup_true_color_environment(args.debug)?;
 
     // Spawn the command in a PTY
-    let mut pty_pair =
+    let (mut pty_pair, child) =
         pty::create_pty_with_command(&args.command, &args.args).context("Failed to create PTY")?;
 
-    // Start bidirectional I/O proxy with capability info
-    let result = proxy::run_proxy(&mut pty_pair, has_osc_support)
-        .await
-        .context("I/O proxy failed");
+    // Start bidirectional I/O proxy with capability info and get exit status
+    let exit_status = proxy::run_proxy(&mut pty_pair, child, has_osc_support).await?;
 
     // Clean up terminal
     terminal::restore_terminal()?;
 
-    result
+    // Exit with the child's exit code if it's non-zero
+    if !exit_status.success() {
+        std::process::exit(exit_status.exit_code() as i32);
+    }
+
+    Ok(())
 }
