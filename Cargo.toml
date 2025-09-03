@@ -17,3 +17,4 @@ clap = { version = "4.4", features = ["derive"] }
 anyhow = "1.0"
 which = "6.0"
 vte = "0.13"
+libc = "0.2"
