@@ -19,15 +19,16 @@
 
 use anyhow::{Context, Result};
 use crossterm::event::{self, Event, KeyCode, KeyEvent};
-use portable_pty::PtyPair;
+use portable_pty::{Child, ExitStatus, PtyPair};
 use std::io::{Read, Write};
 use std::thread;
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
 use vte::Parser;
 
 use crate::vte_handler::{InputVteHandler, VteHandler};
 
-pub async fn run_proxy(pty_pair: &mut PtyPair, has_osc_support: bool) -> Result<()> {
+pub async fn run_proxy(pty_pair: &mut PtyPair, mut child: Box<dyn Child>, has_osc_support: bool) -> Result<ExitStatus> {
     // Check if stdin is a TTY
     let stdin_is_tty = crossterm::tty::IsTty::is_tty(&std::io::stdin());
 
@@ -118,45 +119,76 @@ pub async fn run_proxy(pty_pair: &mut PtyPair, has_osc_support: bool) -> Result<
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
     } else {
-        // Non-TTY mode: copy stdin to PTY with VTE processing for terminal responses
-        let writer = writer;
-        let stdin_thread = thread::spawn(move || {
-            let mut stdin = std::io::stdin();
-            let mut buffer = [0u8; 4096];
-
+        // Non-TTY mode: spawn stdin task but prioritize output completion
+        let stdin_task = tokio::spawn(async move {
             // Create VTE parser and input handler for processing terminal responses
             let mut parser = Parser::new();
             let mut input_handler = InputVteHandler::new(Box::new(writer));
-
+            
+            let mut stdin = tokio::io::stdin();
+            let mut buffer = [0u8; 1024];
+            
             loop {
-                match stdin.read(&mut buffer) {
-                    Ok(0) => break, // EOF
-                    Ok(n) => {
-                        // Process bytes through input VTE parser to handle terminal responses
+                // Try to read with a short timeout
+                match tokio::time::timeout(Duration::from_millis(10), stdin.read(&mut buffer)).await {
+                    Ok(Ok(0)) => {
+                        // EOF on stdin
+                        break;
+                    }
+                    Ok(Ok(n)) => {
+                        // Process the input through VTE parser
                         for &byte in &buffer[..n] {
                             parser.advance(&mut input_handler, byte);
                         }
                     }
-                    Err(_) => break,
+                    Ok(Err(_)) => {
+                        // Error reading stdin
+                        break;
+                    }
+                    Err(_) => {
+                        // Timeout - continue loop, will be aborted when output finishes
+                        continue;
+                    }
                 }
             }
         });
-
-        // Wait for either the output or stdin thread to finish
+        
+        // Wait for either output thread to complete OR child process to exit
+        let mut child_exit_status = None;
         loop {
-            if output_handle.is_finished() || stdin_thread.is_finished() {
+            if output_handle.is_finished() {
                 break;
             }
+            
+            // Check if child process has exited (non-blocking check)
+            if let Ok(Some(status)) = child.try_wait() {
+                child_exit_status = Some(status);
+                // Child has exited, give output thread a moment to finish reading
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                break; // Exit regardless of output thread status
+            }
+            
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-
-        let _ = stdin_thread.join();
+        
+        // Clean up
+        let _ = output_handle.join();
+        stdin_task.abort();
+        let _ = stdin_task.await;
+        
+        // Return the exit status we captured, or wait for it if we didn't get it yet
+        let exit_status = if let Some(status) = child_exit_status {
+            status
+        } else {
+            child.wait().context("Failed to wait for child process")?
+        };
+        
+        return Ok(exit_status);
     }
 
-    // Wait for output thread to finish
-    let _ = output_handle.join();
-
-    Ok(())
+    // TTY mode - wait for child process and return its exit status  
+    let exit_status = child.wait().context("Failed to wait for child process")?;
+    Ok(exit_status)
 }
 
 async fn read_user_input() -> Result<Option<Vec<u8>>> {
